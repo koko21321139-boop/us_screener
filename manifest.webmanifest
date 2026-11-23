@@ -1,0 +1,29 @@
+{
+  "name": "米国成長株スクリーナー",
+  "short_name": "米国株",
+  "description": "ミネルヴィニのトレンドテンプレートとCAN-SLIMで米国株（S&P500＋S&P400）を毎日スクリーニング",
+  "lang": "ja",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f2f3f6",
+  "theme_color": "#0f4c5c",
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "icons/maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
