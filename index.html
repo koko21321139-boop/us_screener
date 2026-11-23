@@ -34,7 +34,7 @@ button{background:none;border:0;cursor:pointer}
 .mkt{display:inline-block;font-weight:700;border-radius:999px;padding:1px 9px;font-size:12px}
 .mkt.good{background:var(--ok-soft);color:var(--ok)} .mkt.warn{background:#fdf1d8;color:#9a6700} .mkt.bad{background:var(--down-soft);color:var(--down)}
 .tabs{display:flex;gap:2px;overflow-x:auto;scrollbar-width:none}
-.tab{padding:9px 12px;border-bottom:2px solid transparent;color:var(--muted);white-space:nowrap}
+.tab{padding:9px 9px;border-bottom:2px solid transparent;color:var(--muted);white-space:nowrap}
 .tab[aria-selected="true"]{color:var(--accent);border-bottom-color:var(--accent);font-weight:700}
 .tab .n{font-size:11px;margin-left:3px}
 main{padding:10px 12px calc(env(safe-area-inset-bottom) + 80px);max-width:760px;margin:0 auto}
@@ -83,6 +83,17 @@ input[type=search]{width:100%;font:inherit;padding:9px 11px;border:1px solid var
 .copybtn{flex:1;padding:7px 8px;border:1px solid var(--line);border-radius:10px;background:var(--card);font-size:13px}
 .toast{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom) + 96px);transform:translateX(-50%);background:var(--ink);color:var(--paper);padding:8px 14px;border-radius:999px;font-size:13px;z-index:20;opacity:0;transition:opacity .2s;pointer-events:none}
 .toast.show{opacity:1}
+.sec-row{display:block;width:100%;text-align:left;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:9px 11px;margin-bottom:7px}
+.sec-top{display:flex;align-items:center;gap:8px}
+.sec-name{font-weight:700;width:88px;flex:none}
+.sec-name small{display:block;font-weight:400;font-size:11px;color:var(--muted);font-family:var(--num)}
+.bar{flex:1;height:14px;position:relative;background:var(--accent-soft);border-radius:4px}
+.bar i{position:absolute;top:0;bottom:0;border-radius:4px}
+.bar .mid{position:absolute;left:50%;top:-2px;bottom:-2px;width:1px;background:var(--muted)}
+.sec-val{width:58px;text-align:right;font-family:var(--num);font-size:13px}
+.sec-sub{display:flex;gap:10px;flex-wrap:wrap;font-size:11.5px;color:var(--muted);margin-top:4px;padding-left:96px}
+.sec-sub b{color:var(--ink);font-weight:600}
+.secchip{display:inline-flex;align-items:center;gap:6px;margin:0 0 8px;padding:4px 10px;border-radius:999px;background:var(--accent);color:var(--on-accent);font-size:13px}
 .more{display:block;width:100%;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--card);margin-top:4px}
 </style>
 </head>
@@ -96,6 +107,7 @@ input[type=search]{width:100%;font:inherit;padding:9px 11px;border:1px solid var
   <nav class="tabs" role="tablist">
     <button class="tab" role="tab" data-tab="pass">通過<span class="n" id="n-pass"></span></button>
     <button class="tab" role="tab" data-tab="near">あと一歩<span class="n" id="n-near"></span></button>
+    <button class="tab" role="tab" data-tab="sector">セクター</button>
     <button class="tab" role="tab" data-tab="market">地合い</button>
     <button class="tab" role="tab" data-tab="search">検索</button>
   </nav>
@@ -108,7 +120,7 @@ const store = {
   get(k, d) { try { const v = localStorage.getItem('usscr-' + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem('usscr-' + k, JSON.stringify(v)); } catch {} }
 };
-const state = { tab: store.get('tab', 'pass'), filters: new Set(), sort: store.get('sort', 'rs'), q: '', limit: 60 };
+const state = { secPeriod: store.get('secPeriod', 'm1'), sector: null, tab: store.get('tab', 'pass'), filters: new Set(), sort: store.get('sort', 'rs'), q: '', limit: 60 };
 let stars = new Set(store.get('stars', []));
 let D = null, HIST = {};
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -177,6 +189,11 @@ function plan(i) {
     <span class="st">${st}</span></div>`;
 }
 
+function secRank(name) {
+  const x = (D.sectors || []).find(s => s.name === name);
+  return x?.rank ? `（${x.rank}位）` : '';
+}
+
 function card(i) {
   const st = stars.has(i.code), s = i.ttPass === 8 ? streak(i.code) : 0;
   const isNew = Object.keys(HIST).length > 1 ? s === 1 : i.new;
@@ -184,7 +201,7 @@ function card(i) {
     i.vcp && '<span class="pill ok">VCP候補</span>', i.newHigh && '<span class="pill">52週高値</span>',
     s > 1 && `<span class="pill gray">${s}日連続</span>`, i.scale && `<span class="pill gray">${esc(i.scale)}</span>`].filter(Boolean).join('');
   return `<article class="card">
-    <div class="row1"><span class="name">${esc(i.name)}</span><span class="code">${esc(i.code)}</span><span class="meta">${esc(i.sector)}</span>
+    <div class="row1"><span class="name">${esc(i.name)}</span><span class="code">${esc(i.code)}</span><span class="meta">${esc(i.sector)}${secRank(i.sector)}</span>
       <button class="star" data-star="${esc(i.code)}" aria-pressed="${st}" aria-label="ウォッチ">${st ? '★' : '☆'}</button></div>
     <div class="row2"><span class="px">${i.close != null ? usd(i.close) : '—'}</span>${sgn(i.chg, 2)}
       <span class="meta">TT ${i.ttPass}/8</span><span class="rs">RS<b>${i.rs ?? '—'}</b></span></div>
@@ -195,14 +212,34 @@ function card(i) {
 
 function list(items) {
   let arr = items.filter(i => [...state.filters].every(k => FILTERS.find(f => f[0] === k)[2](i)));
+  if (state.sector) arr = arr.filter(i => i.sector === state.sector);
   arr = arr.sort(SORTS[state.sort][1]);
   const shown = arr.slice(0, state.limit);
   state.current = arr;
-  return `<div class="chips">${FILTERS.map(([k, l]) => `<button class="chip" data-filter="${k}" aria-pressed="${state.filters.has(k)}">${l}</button>`).join('')}</div>
+  return `${state.sector ? `<button class="secchip" data-clearsector="1">${esc(state.sector)}のみ ✕</button>` : ''}<div class="chips">${FILTERS.map(([k, l]) => `<button class="chip" data-filter="${k}" aria-pressed="${state.filters.has(k)}">${l}</button>`).join('')}</div>
     <div class="sortbar">${arr.length}銘柄 <span style="margin-left:auto">並び順</span><select id="sort">${Object.entries(SORTS).map(([k, [l]]) => `<option value="${k}" ${k === state.sort ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
     ${arr.length ? `<div class="copybar"><button class="copybtn" data-copy="code">ティッカーをコピー（${arr.length}）</button><button class="copybtn" data-copy="name">ティッカー＋社名をコピー</button></div>` : ''}
     ${shown.map(card).join('') || '<div class="empty">条件に合う銘柄はありません</div>'}
     ${arr.length > shown.length ? `<button class="more" id="more">さらに表示（残り${arr.length - shown.length}）</button>` : ''}`;
+}
+
+const PERIODS = [['d1', '1日'], ['w1', '1週'], ['m1', '1か月'], ['m3', '3か月'], ['ytd', '年初来']];
+function sectorView() {
+  const per = state.secPeriod || 'm1';
+  const rows = (D.sectors || []).filter(x => x[per] != null).sort((a, b) => b[per] - a[per]);
+  if (!rows.length) return '<div class="empty">セクターのデータは次回の更新から表示されます</div>';
+  const maxAbs = Math.max(...rows.map(x => Math.abs(x[per])), 0.1);
+  return `<div class="chips">${PERIODS.map(([k, l]) => `<button class="chip" data-period="${k}" aria-pressed="${k === per}">${l}</button>`).join('')}</div>
+    ${rows.map(x => {
+      const v = x[per], w = Math.abs(v) / maxAbs * 50;
+      const bar = `<i style="${v >= 0 ? `left:50%;width:${w}%;background:var(--up)` : `right:50%;width:${w}%;background:var(--down)`}"></i>`;
+      return `<button class="sec-row" data-sector="${esc(x.name)}">
+        <div class="sec-top"><span class="sec-name">${esc(x.name)}<small>${esc(x.etf)}${x.rank ? `・${x.rank}位` : ''}</small></span>
+          <span class="bar">${bar}<span class="mid"></span></span><span class="sec-val">${sgn(v)}</span></div>
+        <div class="sec-sub"><span>通過 <b>${x.pass ?? 0}</b>/${x.n ?? 0}</span><span>50日線より上 <b>${x.pct50 ?? '—'}%</b></span>
+          <span>RS中央値 <b>${x.rsMed ?? '—'}</b></span><span>${x.above50 ? 'ETF 50日線↑' : 'ETF 50日線↓'}・${x.above200 ? '200日線↑' : '200日線↓'}</span></div></button>`;
+    }).join('')}
+    <p class="note">騰落率はセクターETF（SPDR）の終値ベースです。順位は3か月騰落率の順です。「通過」はセクター内でトレンドテンプレート全8条件を満たした銘柄数、「50日線より上」はセクター内で株価が50日線を上回る銘柄の割合です。O'Neilは、上位のセクター・業種から主導株を選ぶことを勧めています。タップするとそのセクターの通過銘柄を表示します。</p>`;
 }
 
 function marketView() {
@@ -231,6 +268,7 @@ function render() {
   if (state.tab === 'pass') m.innerHTML = list(pass);
   else if (state.tab === 'near') m.innerHTML = list(near);
   else if (state.tab === 'market') m.innerHTML = marketView();
+  else if (state.tab === 'sector') m.innerHTML = sectorView();
   else {
     const q = state.q.trim();
     const hits = q ? D.items.filter(i => i.code.startsWith(q.toUpperCase()) || i.name.toLowerCase().includes(q.toLowerCase())).slice(0, 40) : D.items.filter(i => stars.has(i.code));
@@ -265,6 +303,11 @@ async function copyList(kind) {
 document.addEventListener('click', e => {
   const c = e.target.closest('[data-copy]');
   if (c) { copyList(c.dataset.copy); return; }
+  const pr = e.target.closest('[data-period]');
+  if (pr) { state.secPeriod = pr.dataset.period; store.set('secPeriod', state.secPeriod); render(); return; }
+  const sc = e.target.closest('[data-sector]');
+  if (sc) { state.sector = sc.dataset.sector; state.tab = 'pass'; state.limit = 60; render(); scrollTo(0, 0); return; }
+  if (e.target.closest('[data-clearsector]')) { state.sector = null; render(); return; }
   const t = e.target.closest('[data-tab],[data-filter],[data-star]');
   if (!t) return;
   if (t.dataset.tab) { state.tab = t.dataset.tab; state.limit = 60; store.set('tab', state.tab); render(); scrollTo(0, 0); }

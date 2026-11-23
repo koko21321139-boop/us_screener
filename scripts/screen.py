@@ -26,6 +26,8 @@ INDEX_ETFS = [("SPY", "S&P500（SPY）"), ("QQQ", "NASDAQ100（QQQ）")]   # 地
 
 WIKI = {"S&P500": "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies",
         "S&P400": "https://en.wikipedia.org/wiki/List_of_S%26P_400_companies"}
+SECTOR_ETFS = {"情報技術": "XLK", "ヘルスケア": "XLV", "金融": "XLF", "一般消費財": "XLY", "通信サービス": "XLC",
+               "資本財": "XLI", "生活必需品": "XLP", "エネルギー": "XLE", "公益": "XLU", "不動産": "XLRE", "素材": "XLB"}
 SECTOR_JA = {"Information Technology": "情報技術", "Health Care": "ヘルスケア", "Financials": "金融",
              "Consumer Discretionary": "一般消費財", "Communication Services": "通信サービス", "Industrials": "資本財",
              "Consumer Staples": "生活必需品", "Energy": "エネルギー", "Utilities": "公益", "Real Estate": "不動産",
@@ -232,6 +234,7 @@ def evaluate(df):
     pivot = h.iloc[-21:-1].max()     # 直近 20 日（当日を除く）の高値
     return {
         "close": last, "chg": (last / c.iloc[-2] - 1) * 100 if len(c) > 1 else None,
+        "r21": (last / c.iloc[-22] - 1) * 100 if len(c) > 22 else None,
         "tt": tt, "rsRaw": rs_raw(c),
         "fromHigh": (last / hi52 - 1) * 100, "fromLow": (last / lo52 - 1) * 100,
         "volRatio": v.iloc[-1] / vol50 if vol50 else None, "dryUp": vol10 / vol50 if vol50 else None,
@@ -285,6 +288,37 @@ def combined_market(prices):
     return {**idx[0], "state": overall, "indices": idx}
 
 
+def sector_table(prices, evals, stocks):
+    """セクターETFの騰落率と、セクター内の銘柄の状況（通過数・50日線より上の割合・RS）。"""
+    out = []
+    for name, t in SECTOR_ETFS.items():
+        df = prices.get(t)
+        row = {"name": name, "etf": t}
+        if df is not None and len(df) > 70:
+            c = df["Close"].dropna()
+            ret = lambda n: r((c.iloc[-1] / c.iloc[-1 - n] - 1) * 100, 2)
+            ytd = c[c.index >= pd.Timestamp(c.index[-1].year, 1, 1)]
+            base = c[c.index < pd.Timestamp(c.index[-1].year, 1, 1)]
+            row.update({"d1": ret(1), "w1": ret(5), "m1": ret(21), "m3": ret(63),
+                        "ytd": r((c.iloc[-1] / base.iloc[-1] - 1) * 100, 2) if len(base) else None,
+                        "above50": bool(c.iloc[-1] > c.rolling(50).mean().iloc[-1]),
+                        "above200": bool(len(c) >= 200 and c.iloc[-1] > c.rolling(200).mean().iloc[-1]),
+                        "spark": spark(c.iloc[-63:])})
+        members = [(code, e) for code, e in evals.items() if stocks[code]["sector"] == name]
+        if members:
+            rs = sorted(e["rs"] for _, e in members if e.get("rs") is not None)
+            r21 = sorted(e["r21"] for _, e in members if e.get("r21") is not None)
+            row.update({"n": len(members), "pass": sum(sum(bool(x) for x in e["tt"]) == 8 for _, e in members),
+                        "pct50": r(sum(bool(e["tt"][4]) for _, e in members) / len(members) * 100, 0),
+                        "rsMed": rs[len(rs) // 2] if rs else None, "m1Med": r(r21[len(r21) // 2], 1) if r21 else None})
+        out.append(row)
+    # セクターの RS（ETF の 3 か月騰落率の順位。1 が最強）
+    ranked = sorted([x for x in out if x.get("m3") is not None], key=lambda x: -x["m3"])
+    for k, x in enumerate(ranked, 1):
+        x["rank"] = k
+    return out
+
+
 def spark(series):
     s = series.dropna()
     if s.empty:
@@ -319,7 +353,7 @@ def run(prices=None, fundamentals_fn=None):
     tickers = list(codes)
     log(f"対象 {len(codes)} 銘柄（{UNIVERSE}）")
     if prices is None:
-        prices = fetch_prices(tickers + [t for t, _ in INDEX_ETFS])
+        prices = fetch_prices(tickers + [t for t, _ in INDEX_ETFS] + list(SECTOR_ETFS.values()))
     fundamentals_fn = fundamentals_fn or fetch_fundamentals
 
     evals = {}
@@ -395,7 +429,7 @@ def run(prices=None, fundamentals_fn=None):
 
     out = {"asof": asof, "updated": dt.datetime.now(JST).isoformat(timespec="minutes"), "universe": UNIVERSE,
            "count": len(items), "minTurnover": MIN_TURNOVER, "ttLabels": TT_LABELS,
-           "market": combined_market(prices), "prevPass": sorted(prev_pass), "items": items}
+           "market": combined_market(prices), "sectors": sector_table(prices, evals, u["stocks"]), "prevPass": sorted(prev_pass), "items": items}
     save(DATA / "screen.json", out)
 
     # 通過銘柄の履歴（日付ごと。何日連続で通過しているかを見るため）
