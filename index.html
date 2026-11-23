@@ -123,6 +123,7 @@ const store = {
 const state = { secPeriod: store.get('secPeriod', 'm1'), sector: null, tab: store.get('tab', 'pass'), filters: new Set(), sort: store.get('sort', 'rs'), q: '', limit: 60 };
 let stars = new Set(store.get('stars', []));
 let D = null, HIST = {};
+const norm = s => String(s ?? '').normalize('NFKC').toLowerCase();
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const sgn = (v, d = 1, unit = '%') => v == null ? '—' : `<span class="${v > 0 ? 'pos' : v < 0 ? 'neg' : ''}">${v > 0 ? '+' : ''}${v.toFixed(d)}${unit}</span>`;
 
@@ -270,13 +271,21 @@ function render() {
   else if (state.tab === 'market') m.innerHTML = marketView();
   else if (state.tab === 'sector') m.innerHTML = sectorView();
   else {
-    const q = state.q.trim();
-    const hits = q ? D.items.filter(i => i.code.startsWith(q.toUpperCase()) || i.name.toLowerCase().includes(q.toLowerCase())).slice(0, 40) : D.items.filter(i => stars.has(i.code));
-    m.innerHTML = `<input type="search" id="q" placeholder="ティッカー・社名（英語）" value="${esc(q)}">
-      ${q ? '' : `<div class="sec">★ウォッチ（${hits.length}）</div>`}
-      ${hits.map(card).join('') || `<div class="empty">${q ? '見つかりません（S&P500・S&P400以外、売買代金が少ない銘柄は対象外）' : 'カードの☆を押すとここに並びます'}</div>`}`;
+    // 入力欄は作り直さず、結果だけ書き換える（作り直すと日本語入力の変換やキーボードが切れるため）
+    m.innerHTML = `<input type="search" id="q" placeholder="ティッカー・社名（英語）" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="search"><div id="hits"></div>`;
     const inp = $('#q');
-    inp.oninput = () => { state.q = inp.value; const p = inp.selectionStart; render(); const n = $('#q'); n.focus(); n.setSelectionRange(p, p); };
+    inp.value = state.q;
+    const update = () => {
+      state.q = inp.value;
+      const q = norm(state.q.trim());
+      const hits = q ? D.items.filter(i => norm(i.code).startsWith(q) || norm(i.name).includes(q)).slice(0, 40) : D.items.filter(i => stars.has(i.code));
+      $('#hits').innerHTML = `${q ? '' : `<div class="sec">★ウォッチ（${hits.length}）</div>`}
+        ${hits.map(card).join('') || `<div class="empty">${q ? '見つかりません（S&P500・S&P400以外、売買代金が少ない銘柄は対象外）' : 'カードの☆を押すとここに並びます'}</div>`}`;
+    };
+    inp.addEventListener('input', e => { if (!e.isComposing) update(); });
+    inp.addEventListener('compositionend', update);
+    inp.addEventListener('keydown', e => { if (e.key === 'Enter') inp.blur(); });
+    update();
   }
   if (['pass', 'near'].includes(state.tab)) m.insertAdjacentHTML('beforeend',
     `<p class="note">トレンドテンプレートはミネルヴィニ、C・A・N・S・L・I・M は O'Neil の目安を機械的に当てはめたものです。対象はS&P500とS&P400の構成銘柄です。株価・決算は Yahoo Finance の無料データ（非公式）で、誤りや欠けがあり得ます。VCP候補は値幅と出来高の縮小から自動判定したもので、チャートの目視確認が必要です。投資判断はご自身で行ってください。</p>`);
