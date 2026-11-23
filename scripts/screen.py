@@ -176,9 +176,40 @@ def fetch_fundamentals(ticker):
             f["epsQuarter"] = [[str(k)[:7], r(v, 2)] for k, v in s.items()][-6:]
             if len(s) >= 5 and s.iloc[-5] > 0:
                 f["qEpsYoY"] = r((s.iloc[-1] / s.iloc[-5] - 1) * 100)
+            f["epsYoYs"] = yoy_list(s)
+        rrow = next((k for k in ("Total Revenue", "Operating Revenue") if k in q.index), None)
+        if rrow:
+            f["revYoYs"] = yoy_list(q.loc[rrow].dropna().sort_index())
     except Exception:
         pass
+    # 決算の加速：前年同期比の伸び率が、直近 2 期で高まっている（ミネルヴィニの重視点）
+    for k, out in (("epsYoYs", "accelEps"), ("revYoYs", "accelRev")):
+        g = f.get(k) or []
+        f[out] = None if len(g) < 2 else bool(g[-1] > g[-2] and g[-1] > 0)
+    f["nextEarnings"] = next_earnings(t)
     return f
+
+
+def yoy_list(s):
+    """四半期の値から、前年同期比（%）の列を作る（直近 3 期まで）。"""
+    out = []
+    for i in range(4, len(s)):
+        if s.iloc[i - 4] and s.iloc[i - 4] > 0:
+            out.append(r((s.iloc[i] / s.iloc[i - 4] - 1) * 100))
+    return out[-3:]
+
+
+def next_earnings(t):
+    """次の決算発表予定日（YYYY-MM-DD）。取れなければ None。"""
+    try:
+        cal = t.calendar
+        dates = cal.get("Earnings Date") if isinstance(cal, dict) else list(cal.loc["Earnings Date"])
+        today = dt.date.today()
+        ds = sorted(pd.Timestamp(x).date() for x in (dates or []) if x is not None)
+        ds = [x for x in ds if x >= today]
+        return ds[0].isoformat() if ds else None
+    except Exception:
+        return None
 
 
 def pct_or_none(v):
@@ -208,8 +239,8 @@ def contractions(high, low, n=3, w=20):
     return out
 
 
-def evaluate(df):
-    """1 銘柄の指標。RS の順位づけ前の値を返す。"""
+def evaluate(df, bench=None):
+    """1 銘柄の指標。RS の順位づけ前の値を返す。bench は指数 ETF の終値（RS ライン用）。"""
     c, h, l, v = df["Close"], df["High"], df["Low"], df["Volume"].fillna(0)
     if len(c) < 200:
         return None
@@ -232,11 +263,40 @@ def evaluate(df):
     turnover = (c.iloc[-20:] * v.iloc[-20:]).mean()
     con = contractions(h, l)
     pivot = h.iloc[-21:-1].max()     # 直近 20 日（当日を除く）の高値
+    fromHigh = (last / hi52 - 1) * 100
+    # 50日線からの乖離（ミネルヴィニは伸びきった所での買いを戒める）
+    ext50 = (last / ma50.iloc[-1] - 1) * 100
+    # RS ライン（指数に対する相対株価）が 52 週高値圏か。株価より先に高値なら「先行」
+    rs_high = rs_lead = None
+    if bench is not None:
+        b = bench.reindex(c.index).ffill()
+        ratio = (c / b).dropna()
+        if len(ratio) >= 200:
+            rs_high = bool(ratio.iloc[-1] >= ratio.iloc[-252:].max() * 0.995)
+            rs_lead = bool(rs_high and fromHigh < -3)
+    # 出来高の質：直近 50 日の上昇日の出来高合計 ÷ 下落日の出来高合計（1.2 以上で買い集め）
+    d = c.diff().iloc[-50:]
+    upv, dnv = v.iloc[-50:][d > 0].sum(), v.iloc[-50:][d < 0].sum()
+    ud = upv / dnv if dnv else None
+    # 3 週タイト：週足の終値が 3 週続けて 1.5% 以内
+    wk = c.resample("W-FRI").last().dropna()
+    tight = bool(len(wk) >= 3 and (wk.iloc[-3:].max() / wk.iloc[-3:].min() - 1) * 100 <= 1.5)
+    # ポケットピボット：上昇した日の出来高が、直近 10 日の下落日の最大出来高を上回り、10日線・50日線の上
+    prev10 = c.diff().iloc[-11:-1]
+    downmax = v.iloc[-11:-1][prev10 < 0].max() if (prev10 < 0).any() else None
+    ma10 = c.rolling(10).mean().iloc[-1]
+    pocket = bool(downmax and last > c.iloc[-2] and v.iloc[-1] > downmax and last >= ma10 and last >= ma50.iloc[-1])
+    # ATR（14 日の平均的な値幅）。損切り幅は ATR の 2 倍を 3〜8% に収める
+    tr = pd.concat([h - l, (h - c.shift()).abs(), (l - c.shift()).abs()], axis=1).max(axis=1)
+    atr_pct = tr.iloc[-14:].mean() / last * 100
+    stop_pct = min(8.0, max(3.0, 2 * atr_pct))
     return {
         "close": last, "chg": (last / c.iloc[-2] - 1) * 100 if len(c) > 1 else None,
         "r21": (last / c.iloc[-22] - 1) * 100 if len(c) > 22 else None,
         "tt": tt, "rsRaw": rs_raw(c),
-        "fromHigh": (last / hi52 - 1) * 100, "fromLow": (last / lo52 - 1) * 100,
+        "fromHigh": fromHigh, "fromLow": (last / lo52 - 1) * 100,
+        "ext50": ext50, "extended": bool(ext50 >= 25), "rsLineHigh": rs_high, "rsLead": rs_lead,
+        "ud": ud, "tight": tight, "pocket": pocket, "atrPct": atr_pct, "stopPct": stop_pct,
         "volRatio": v.iloc[-1] / vol50 if vol50 else None, "dryUp": vol10 / vol50 if vol50 else None,
         "turnover": turnover, "con": con,
         # VCP 候補：値幅が段階的に縮み、直近は 10% 以内、出来高も細っている
@@ -346,6 +406,63 @@ def canslim(e, f, rs):
     return {k: (None if v is None else bool(v)) for k, v in out.items()}
 
 
+# ---------- 成績表 ----------
+def safe_perf(dfs, bench):
+    try:
+        return performance(dfs, bench, MIN_TURNOVER)
+    except Exception as ex:   # 成績表が作れなくてもスクリーニングは止めない
+        log("  成績表を作れませんでした", ex)
+        return None
+
+
+def performance(dfs, bench, min_turnover, horizons=(21, 63), step=5):
+    """過去の株価から各日のトレンドテンプレート通過銘柄をさかのぼって判定し、その後の騰落率を集計する。
+    （今の構成銘柄で計算するので、上場廃止などで消えた銘柄は含まれない＝やや良く出る）"""
+    if len(dfs) < 50:
+        return None
+    C = pd.DataFrame({k: d["Close"] for k, d in dfs.items()}).sort_index()
+    H = pd.DataFrame({k: d["High"] for k, d in dfs.items()}).reindex(C.index)
+    L = pd.DataFrame({k: d["Low"] for k, d in dfs.items()}).reindex(C.index)
+    V = pd.DataFrame({k: d["Volume"] for k, d in dfs.items()}).reindex(C.index).fillna(0)
+    m50, m150, m200 = (C.rolling(n, min_periods=n).mean() for n in (50, 150, 200))
+    hi, lo = H.rolling(252, min_periods=200).max(), L.rolling(252, min_periods=200).min()
+    raw = 2 * C / C.shift(63) + C / C.shift(126) + C / C.shift(189) + C / C.shift(252)
+    rs = raw.rank(axis=1, pct=True) * 98 + 1
+    ok = ((C > m150) & (C > m200) & (m150 > m200) & (m200 > m200.shift(21)) & (m50 > m150) & (m50 > m200)
+          & (C > m50) & (C >= lo * 1.3) & (C >= hi * 0.75) & (rs >= 70)
+          & ((C * V).rolling(20).mean() >= min_turnover))
+    valid = m200.notna() & ((C * V).rolling(20).mean() >= min_turnover)
+    b = bench.reindex(C.index).ffill() if bench is not None else None
+    out = {}
+    for hz in horizons:
+        fwd = C.shift(-hz) / C - 1
+        rows = range(260, len(C) - hz, step)
+        picks, univ, idx = [], [], []
+        for i in rows:
+            p = fwd.iloc[i][ok.iloc[i]].dropna()
+            u = fwd.iloc[i][valid.iloc[i]].dropna()
+            if len(p):
+                picks += list(p.values)
+            if len(u):
+                univ.append(float(u.median()))
+            if b is not None and pd.notna(b.iloc[i]) and pd.notna(b.iloc[i + hz]):
+                idx.append(b.iloc[i + hz] / b.iloc[i] - 1)
+        if not picks:
+            continue
+        a = np.array(picks) * 100
+        out[f"h{hz}"] = {"n": len(a), "dates": len(rows), "mean": r(a.mean()), "median": r(np.median(a)),
+                         "win": r((a > 0).mean() * 100, 0), "big": r((a >= 20).mean() * 100, 0),
+                         "loss": r((a <= -10).mean() * 100, 0),
+                         "univ": r(np.mean(univ) * 100) if univ else None,
+                         "bench": r(np.mean(idx) * 100) if idx else None}
+    if not out:
+        return None
+    first = C.index[260] if len(C) > 260 else C.index[0]
+    out["from"] = pd.Timestamp(first).date().isoformat()
+    out["to"] = pd.Timestamp(C.index[-1]).date().isoformat()
+    return out
+
+
 # ---------- メイン ----------
 def run(prices=None, fundamentals_fn=None):
     u = universe()
@@ -356,13 +473,15 @@ def run(prices=None, fundamentals_fn=None):
         prices = fetch_prices(tickers + [t for t, _ in INDEX_ETFS] + list(SECTOR_ETFS.values()))
     fundamentals_fn = fundamentals_fn or fetch_fundamentals
 
+    bench = prices.get(INDEX_ETFS[0][0])
+    bench = bench["Close"] if bench is not None else None
     evals = {}
     for c in codes:
         df = prices.get(c)
         if df is None:
             continue
         try:
-            e = evaluate(df)
+            e = evaluate(df, bench)
         except Exception as ex:
             log(f"  {c} 計算できず", ex)
             continue
@@ -385,7 +504,8 @@ def run(prices=None, fundamentals_fn=None):
     fund = load(fpath, {})
     stale = (dt.date.today() - dt.timedelta(days=FUND_DAYS)).isoformat()
     need = [c for c, e in evals.items() if sum(bool(x) for x in e["tt"]) >= 7
-            and fund.get(c, {}).get("fetched", "") < stale]
+            and (fund.get(c, {}).get("fetched", "") < stale
+                 or (fund.get(c, {}).get("nextEarnings") or "9999") < dt.date.today().isoformat())]
     log(f"決算データを取得 {len(need)} 銘柄")
     for i, c in enumerate(need):
         try:
@@ -411,13 +531,17 @@ def run(prices=None, fundamentals_fn=None):
               "fromHigh": r(e["fromHigh"]), "fromLow": r(e["fromLow"]), "volRatio": r(e["volRatio"], 2),
               "dryUp": r(e["dryUp"], 2), "turnover": r(e["turnover"] / 1e6, 0),
               "vcp": e["vcp"], "breakout": e["breakout"], "newHigh": e["newHigh"],
+              "ext50": r(e["ext50"]), "extended": e["extended"], "rsLineHigh": e["rsLineHigh"], "rsLead": e["rsLead"],
+              "ud": r(e["ud"], 2), "tight": e["tight"], "pocket": e["pocket"],
+              "atrPct": r(e["atrPct"], 1), "stopPct": r(e["stopPct"], 1),
               "pivot": r(e["pivot"], 2), "toPivot": r(e["toPivot"], 1), "con": [r(x) for x in e["con"]]}
         if n >= 7:
             cl, m50, m150, m200 = e["_series"]
             base = cl.iloc[-120]
             it["spark"] = {k: [r((x / base - 1) * 100) for x in sr.iloc[-120:].values]
                            for k, sr in (("c", cl), ("m50", m50), ("m150", m150), ("m200", m200))}
-            it["fund"] = {k: f.get(k) for k in ("qEpsYoY", "qRevYoY", "inst", "roe", "epsAnnual", "epsQuarter")}
+            it["fund"] = {k: f.get(k) for k in ("qEpsYoY", "qRevYoY", "inst", "roe", "epsAnnual", "epsQuarter",
+                                                "epsYoYs", "revYoYs", "accelEps", "accelRev", "nextEarnings")}
             try:
                 it["cs"] = canslim(e, f, e["rs"])
             except Exception as ex:   # 決算データの形が想定外でも全体は止めない
@@ -429,7 +553,8 @@ def run(prices=None, fundamentals_fn=None):
 
     out = {"asof": asof, "updated": dt.datetime.now(JST).isoformat(timespec="minutes"), "universe": UNIVERSE,
            "count": len(items), "minTurnover": MIN_TURNOVER, "ttLabels": TT_LABELS,
-           "market": combined_market(prices), "sectors": sector_table(prices, evals, u["stocks"]), "prevPass": sorted(prev_pass), "items": items}
+           "market": combined_market(prices), "sectors": sector_table(prices, evals, u["stocks"]), "prevPass": sorted(prev_pass), "items": items,
+           "perf": safe_perf({c: prices[c] for c in evals}, bench)}
     save(DATA / "screen.json", out)
 
     # 通過銘柄の履歴（日付ごと。何日連続で通過しているかを見るため）

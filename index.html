@@ -94,6 +94,11 @@ input[type=search]{width:100%;font:inherit;padding:9px 11px;border:1px solid var
 .sec-sub{display:flex;gap:10px;flex-wrap:wrap;font-size:11.5px;color:var(--muted);margin-top:4px;padding-left:96px}
 .sec-sub b{color:var(--ink);font-weight:600}
 .secchip{display:inline-flex;align-items:center;gap:6px;margin:0 0 8px;padding:4px 10px;border-radius:999px;background:var(--accent);color:var(--on-accent);font-size:13px}
+.pill.warn{background:#fdf1d8;color:#8a5a00}
+@media (prefers-color-scheme:dark){.pill.warn{background:#3a2e14;color:#f2c14e}}
+.perf{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px}
+.perf div{background:var(--accent-soft);border-radius:10px;padding:8px 10px;font-size:12px;color:var(--muted)}
+.perf b{display:block;font-size:18px;font-family:var(--num);color:var(--ink)}
 .more{display:block;width:100%;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--card);margin-top:4px}
 </style>
 </head>
@@ -128,7 +133,9 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 const sgn = (v, d = 1, unit = '%') => v == null ? '—' : `<span class="${v > 0 ? 'pos' : v < 0 ? 'neg' : ''}">${v > 0 ? '+' : ''}${v.toFixed(d)}${unit}</span>`;
 
 const FILTERS = [
-  ['vcp', 'VCP候補', i => i.vcp], ['bo', 'ブレイク', i => i.breakout], ['new', '新規通過', i => i.ttPass === 8 && (Object.keys(HIST).length > 1 ? streak(i.code) === 1 : i.new)],
+  ['vcp', 'VCP候補', i => i.vcp], ['bo', 'ブレイク', i => i.breakout],
+  ['form', '買いの形', i => i.vcp || i.tight || i.pocket || i.breakout], ['rsl', 'RSライン高値', i => i.rsLineHigh],
+  ['safe', '伸びすぎ・決算前を除く', i => !i.extended && !((d => d != null && d <= 14)(daysTo(i)))], ['new', '新規通過', i => i.ttPass === 8 && (Object.keys(HIST).length > 1 ? streak(i.code) === 1 : i.new)],
   ['hi', '高値圏 5%以内', i => i.fromHigh >= -5], ['cs', 'CAN-SLIM 5文字以上', i => csCount(i) >= 5],
   ['sp500', 'S&P500', i => i.scale === 'S&P500'], ['sp400', 'S&P400', i => i.scale === 'S&P400'], ['star', '★', i => stars.has(i.code)],
 ];
@@ -157,6 +164,14 @@ function letters(i) {
   return `<div class="letters">${'CANSLIM'.split('').map(k => `<span class="letter ${L[k] ? 'on' : L[k] == null ? 'na' : ''}" title="${tip[k]}">${k}</span>`).join('')}</div>`;
 }
 
+function daysTo(i) {
+  const d = i.fund?.nextEarnings;
+  if (!d) return null;
+  const t = new Date(); t.setHours(0, 0, 0, 0);
+  return Math.round((new Date(d + 'T00:00:00') - t) / 864e5);
+}
+const trend = arr => (arr || []).length ? arr.map(v => (v > 0 ? '+' : '') + v.toFixed(0) + '%').join(' → ') : '—';
+
 function detail(i) {
   const f = i.fund || {}, labels = D.ttLabels;
   const csRows = [['直近四半期EPS（前年比）', sgn(f.qEpsYoY)], ['売上高（前年比）', sgn(f.qRevYoY)],
@@ -165,28 +180,35 @@ function detail(i) {
   return `<details><summary>条件の詳細 ›</summary>
     <ul class="check">${i.tt.map((ok, k) => `<li><span class="${ok ? 'yes' : 'no'}">${ok ? '✓' : '×'}</span>${esc(labels[k])}</li>`).join('')}</ul>
     <table>
+      <tr><td>50日線からの乖離</td><td>${sgn(i.ext50)}${i.extended ? '（伸びすぎ）' : ''}</td></tr>
+      <tr><td>RSライン（指数との相対）</td><td>${i.rsLead ? '株価より先に高値' : i.rsLineHigh ? '52週高値圏' : i.rsLineHigh === false ? '高値圏ではない' : '—'}</td></tr>
+      <tr><td>出来高の質（上昇日÷下落日）</td><td>${i.ud ?? '—'}${i.ud >= 1.2 ? '（買い集め）' : i.ud <= 0.8 ? '（売り抜け）' : ''}</td></tr>
+      <tr><td>1日の平均値幅（ATR）</td><td>${i.atrPct ?? '—'}%</td></tr>
       <tr><td>52週高値から / 安値から</td><td>${sgn(i.fromHigh)} / ${sgn(i.fromLow, 0)}</td></tr>
       <tr><td>出来高（当日 ÷ 50日平均）</td><td>${i.volRatio ?? '—'}倍</td></tr>
       <tr><td>出来高の細り（10日 ÷ 50日）</td><td>${i.dryUp ?? '—'}</td></tr>
       <tr><td>値幅の収縮（20日ごと）</td><td>${(i.con || []).map(v => v?.toFixed(0) + '%').join(' → ')}</td></tr>
       <tr><td>ピボット（20日高値）</td><td>${i.pivot != null ? usd(i.pivot) : '—'}（${sgn(i.toPivot)}）</td></tr>
       <tr><td>20日平均売買代金</td><td>$${i.turnover?.toLocaleString('en-US')}M</td></tr>
+      ${i.fund ? `<tr><td>次の決算予定</td><td>${i.fund.nextEarnings ? `${i.fund.nextEarnings.slice(5).replace('-', '/')}（あと${daysTo(i)}日）` : '—'}</td></tr>
+        <tr><td>EPS伸び率の推移（前年比）</td><td>${trend(i.fund.epsYoYs)}${i.fund.accelEps ? '（加速）' : ''}</td></tr>
+        <tr><td>売上伸び率の推移（前年比）</td><td>${trend(i.fund.revYoYs)}${i.fund.accelRev ? '（加速）' : ''}</td></tr>` : ''}
       ${i.fund ? csRows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('') : ''}
     </table></details>`;
 }
 
 // エントリー目安（ミネルヴィニ／オニール）：ピボット超えで買い、ピボット+5%までが買ってよい範囲、
-// 損切りは買値の-7%、利確の目安は+20%
+// 損切りは値動きの大きさ（ATR の 2 倍）に合わせて買値の -3〜-8%、利確の目安は +20%
 const usd = v => '$' + Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const yen = usd;
 function plan(i) {
   if (!i.pivot || !i.close) return '';
-  const p = i.pivot, lim = p * 1.05, cut = p * 0.93, tp = p * 1.2;
+  const p = i.pivot, stop = i.stopPct ?? 7, lim = p * 1.05, cut = p * (1 - stop / 100), tp = p * 1.2;
   const st = i.close < p ? `ピボットまで あと${((p / i.close - 1) * 100).toFixed(1)}%（超えたら買い）`
     : i.close <= lim ? 'ピボット超え：買ってよい範囲内' : `ピボット+5%超え：追いかけ買いは避ける`;
   return `<div class="plan">
     <span class="buy">買い<b>${yen(p)}</b></span><span>上限<b>${yen(lim)}</b></span>
-    <span class="cut">損切り<b>${yen(cut)}</b></span><span>利確目安<b>${yen(tp)}</b></span>
+    <span class="cut">損切り -${stop.toFixed(1)}%<b>${yen(cut)}</b></span><span>利確目安<b>${yen(tp)}</b></span>
     <span class="st">${st}</span></div>`;
 }
 
@@ -199,7 +221,13 @@ function card(i) {
   const st = stars.has(i.code), s = i.ttPass === 8 ? streak(i.code) : 0;
   const isNew = Object.keys(HIST).length > 1 ? s === 1 : i.new;
   const tags = [isNew && '<span class="pill hot">新規通過</span>', i.breakout && '<span class="pill hot">ブレイク</span>',
-    i.vcp && '<span class="pill ok">VCP候補</span>', i.newHigh && '<span class="pill">52週高値</span>',
+    i.vcp && '<span class="pill ok">VCP候補</span>', i.tight && '<span class="pill ok">3週タイト</span>',
+    i.pocket && '<span class="pill ok">ポケットピボット</span>',
+    i.rsLead ? '<span class="pill ok">RSライン先行</span>' : i.rsLineHigh && '<span class="pill">RSライン高値</span>',
+    i.newHigh && '<span class="pill">52週高値</span>', i.fund?.accelEps && '<span class="pill ok">EPS加速</span>',
+    i.ud >= 1.2 && '<span class="pill">買い集め</span>', i.ud != null && i.ud <= 0.8 && '<span class="pill warn">売り抜け</span>',
+    i.extended && `<span class="pill warn">伸びすぎ +${i.ext50.toFixed(0)}%</span>`,
+    (d => d != null && d >= 0 && d <= 14 && `<span class="pill warn">決算まで${d}日</span>`)(daysTo(i)),
     s > 1 && `<span class="pill gray">${s}日連続</span>`, i.scale && `<span class="pill gray">${esc(i.scale)}</span>`].filter(Boolean).join('');
   return `<article class="card">
     <div class="row1"><span class="name">${esc(i.name)}</span><span class="code">${esc(i.code)}</span><span class="meta">${esc(i.sector)}${secRank(i.sector)}</span>
@@ -243,6 +271,23 @@ function sectorView() {
     <p class="note">騰落率はセクターETF（SPDR）の終値ベースです。順位は3か月騰落率の順です。「通過」はセクター内でトレンドテンプレート全8条件を満たした銘柄数、「50日線より上」はセクター内で株価が50日線を上回る銘柄の割合です。O'Neilは、上位のセクター・業種から主導株を選ぶことを勧めています。タップするとそのセクターの通過銘柄を表示します。</p>`;
 }
 
+function perfView() {
+  const p = D.perf;
+  if (!p) return '';
+  const box = (k, label) => {
+    const x = p[k];
+    if (!x) return '';
+    return `<article class="card"><div class="row1"><span class="name" style="max-width:none">${label}</span></div>
+      <div class="perf"><div>平均<b>${sgn(x.mean)}</b></div><div>勝率（プラス）<b>${x.win}%</b></div>
+        <div>+20%以上<b>${x.big}%</b></div><div>-10%以下<b>${x.loss}%</b></div>
+        <div>対象銘柄全体（中央値の平均）<b>${sgn(x.univ)}</b></div><div>S&P500（SPY）<b>${sgn(x.bench)}</b></div></div>
+      <div class="meta" style="margin-top:6px">中央値 ${sgn(x.median)}・のべ${x.n.toLocaleString('ja-JP')}件（${x.dates}日分）</div></article>`;
+  };
+  return `<div class="sec">スクリーニングの成績（過去の通過銘柄のその後）</div>
+    ${box('h21', '通過した日から1か月後')}${box('h63', '通過した日から3か月後')}
+    <p class="note">${p.from.replaceAll('-', '/')}〜${p.to.replaceAll('-', '/')}の株価から、各日（1週ごと）にトレンドテンプレート全8条件を満たしていた銘柄を判定し直し、その後の騰落率を集計しています。今の構成銘柄で計算しているため、上場廃止などで消えた銘柄は含まれず、実際よりやや良く出ます。手数料・損切りは考慮していません。</p>`;
+}
+
 function marketView() {
   const m = D.market || {};
   const p = (v, l) => `<li><span class="${v ? 'yes' : 'no'}">${v ? '✓' : '×'}</span>${l}</li>`;
@@ -254,6 +299,7 @@ function marketView() {
     <ul class="check">${p(x.above50, '50日線の上')}${p(x.above200, '200日線の上')}${p(x.ma50over200, '50日線 > 200日線')}
       ${p(x.distDays <= 4, `売り抜け日（25日間）：${x.distDays ?? '—'}日（5日以上で警戒）`)}</ul></article>`).join('') + `
     <p class="note">CAN-SLIMの「M」です。売り抜け日は、ETFが0.2%以上下げ、出来高が前日より増えた日です。O'Neilは、上昇トレンドのときだけ新規の買いを勧めています。</p>
+    ${perfView()}
     <div class="sec">通過銘柄数の推移</div>
     <article class="card">${Object.entries(HIST).slice(-30).map(([d, c]) => `<div class="meta" style="display:flex;gap:8px"><span style="width:44px">${d.slice(5).replace('-', '/')}</span><span style="flex:1;background:var(--accent-soft);border-radius:4px"><span style="display:block;height:12px;border-radius:4px;background:var(--accent);width:${Math.min(100, c.length / Math.max(...Object.values(HIST).map(x => x.length), 1) * 100)}%"></span></span><span style="width:32px;text-align:right">${c.length}</span></div>`).join('') || '<div class="empty">まだ記録がありません</div>'}</article>`;
 }
